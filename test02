@@ -1,0 +1,140 @@
+provider "azurerm" {
+  features {}
+}
+
+# Data Sources for Key Vault
+data "azurerm_key_vault" "terraform_vault" {
+  name                = "la-brs-prod-kv-terraform"
+  resource_group_name = "la-brs-prod-rg-terraform"
+}
+
+data "azurerm_key_vault_secret" "vm_admin_cra_user" {
+  name         = "vm-admin-cra-user"
+  key_vault_id = data.azurerm_key_vault.terraform_vault.id
+}
+
+data "azurerm_key_vault_secret" "vm_admin_cra_password" {
+  name         = "vm-admin-cra-password"
+  key_vault_id = data.azurerm_key_vault.terraform_vault.id
+}
+
+resource "azurerm_resource_group" "example" {
+  name     = "example-resources"
+  location = "East US"
+}
+
+resource "azurerm_virtual_network" "example" {
+  name                = "example-network"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.example.location
+  resource_group_name = azurerm_resource_group.example.name
+}
+
+resource "azurerm_subnet" "example" {
+  name                 = "example-subnet"
+  resource_group_name  = azurerm_resource_group.example.name
+  virtual_network_name = azurerm_virtual_network.example.name
+  address_prefixes     = ["10.0.2.0/24"]
+}
+
+resource "azurerm_network_interface" "example" {
+  name                = "example-nic"
+  location            = azurerm_resource_group.example.location
+  resource_group_name = azurerm_resource_group.example.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.example.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+# Windows Virtual Machine (Optional)
+resource "azurerm_windows_virtual_machine" "example_windows" {
+  count = var.windows != null ? 1 : 0
+
+  admin_password           = data.azurerm_key_vault_secret.vm_admin_cra_password.value
+  admin_username           = data.azurerm_key_vault_secret.vm_admin_cra_user.value
+  computer_name            = var.windows.computer_name
+  enable_automatic_updates = var.windows.enable_automatic_updates
+  location                 = azurerm_resource_group.example.location
+  name                     = var.windows.name
+  license_type             = try(var.windows.license_type, null)
+  network_interface_ids    = [azurerm_network_interface.example.id]
+  patch_assessment_mode    = var.windows.patch_assessment_mode
+  patch_mode               = var.windows.patch_mode
+  resource_group_name      = azurerm_resource_group.example.name
+  size                     = var.windows.size
+  zone                     = var.windows.zone
+
+  os_disk {
+    caching              = var.windows.os_disk.caching
+    disk_size_gb         = var.windows.os_disk.disk_size_gb
+    name                 = var.windows.os_disk.name
+    storage_account_type = var.windows.os_disk.storage_account_type
+  }
+
+  source_image_reference {
+    offer     = var.windows.source_image_reference.offer
+    publisher = var.windows.source_image_reference.publisher
+    sku       = var.windows.source_image_reference.sku
+    version   = var.windows.source_image_reference.version
+  }
+
+  tags = var.tags
+}
+
+# Linux Virtual Machine (Optional)
+resource "azurerm_linux_virtual_machine" "example_linux" {
+  count = var.linux != null ? 1 : 0
+
+  admin_password                  = data.azurerm_key_vault_secret.vm_admin_cra_password.value
+  admin_username                  = data.azurerm_key_vault_secret.vm_admin_cra_user.value
+  computer_name                   = var.linux.computer_name
+  disable_password_authentication = var.linux.disable_password_authentication
+  location                        = azurerm_resource_group.example.location
+  name                            = var.linux.name
+  network_interface_ids           = [azurerm_network_interface.example.id]
+  resource_group_name             = azurerm_resource_group.example.name
+  size                            = var.linux.size
+  zone                            = var.linux.zone
+
+  os_disk {
+    caching              = var.linux.os_disk.caching
+    disk_size_gb         = var.linux.os_disk.disk_size_gb
+    name                 = var.linux.os_disk.name
+    storage_account_type = var.linux.os_disk.storage_account_type
+  }
+
+  source_image_reference {
+    offer     = var.linux.source_image_reference.offer
+    publisher = var.linux.source_image_reference.publisher
+    sku       = var.linux.source_image_reference.sku
+    version   = var.linux.source_image_reference.version
+  }
+
+  tags = var.tags
+}
+
+# Optional Managed Disks
+resource "azurerm_managed_disk" "example" {
+  for_each = var.disks
+
+  create_option        = each.value.create_option
+  disk_size_gb         = each.value.disk_size_gb
+  location             = azurerm_resource_group.example.location
+  name                 = each.value.name
+  resource_group_name  = azurerm_resource_group.example.name
+  storage_account_type = each.value.storage_account_type
+  zone                 = each.value.zone
+  tags = var.tags
+}
+
+resource "azurerm_virtual_machine_data_disk_attachment" "example" {
+  for_each = var.disks
+
+  managed_disk_id    = azurerm_managed_disk.example[each.key].id
+  caching            = each.value.caching
+  lun                = each.value.lun
+  virtual_machine_id = var.windows != null ? azurerm_windows_virtual_machine.example_windows[0].id : azurerm_linux_virtual_machine.example_linux[0].id
+}
